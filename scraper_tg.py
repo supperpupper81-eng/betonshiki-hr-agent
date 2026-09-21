@@ -10,18 +10,50 @@ from config import CHANNELS, KEYWORDS_CANDIDATES, EXCLUDE_KEYWORDS, HOURS_LOOKBA
 
 logger = logging.getLogger(__name__)
 
+# Признаки, что это ВАКАНСИЯ (работодатель), а не соискатель
+VACANCY_SIGNS = [
+    "требуется", "требуются", "нужен", "нужна", "нужны",
+    "ищем", "ищет", "вакансия", "вакансии", "набор",
+    "приглашаем", "требования", "обязанности",
+    "зарплата", "з/п", "зп", "₽", "руб.", "рублей",
+    "оформление", "трудоустройство", "график работы",
+    "вахта", "предоставляется", "питание", "проживание",
+    "от", "до", "тыс", "тысяч",
+]
+
 
 def is_candidate(text: str) -> bool:
     text_lower = text.lower()
-    has_positive = any(kw in text_lower for kw in KEYWORDS_CANDIDATES)
-    if not has_positive:
+
+    # Должно быть хоть одно слово про бетон/монолит/арматуру
+    has_trade = any(kw in text_lower for kw in [
+        "бетонщик", "бетонщики", "монолитчик", "монолитчики",
+        "арматурщик", "арматурщики", "опалубщик", "монолит", "бетон"
+    ])
+    if not has_trade:
         return False
-    has_exclude = any(kw in text_lower for kw in EXCLUDE_KEYWORDS)
-    if has_exclude:
-        if any(w in text_lower for w in ["ищу работу", "резюме", "готов выйти", "готов к работе"]):
-            return True
+
+    # Если много признаков вакансии — это работодатель
+    vacancy_hits = sum(1 for s in VACANCY_SIGNS if s in text_lower)
+    if vacancy_hits >= 2:
         return False
-    return True
+
+    # Явные признаки соискателя
+    seeker_signs = [
+        "ищу работу", "ищу работу", "резюме", "готов выйти",
+        "готов к работе", "рассмотрю предложения", "имею опыт",
+        "опыт работы", "мой опыт", "работаю", "ищу вахту",
+        "бригада ищет", "мы ищем работу", "свободны",
+    ]
+    if any(s in text_lower for s in seeker_signs):
+        return True
+
+    # Если есть телефон и мало признаков вакансии — оставляем как возможного кандидата
+    has_phone = bool(re.search(r"\+?7[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}", text))
+    if has_phone and vacancy_hits == 0:
+        return True
+
+    return False
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_fixed(3))
@@ -89,7 +121,7 @@ def parse_messages(html: str, channel: str) -> List[Dict]:
                 "channel": channel,
             })
         except Exception as e:
-            logger.warning(f"Ошибка парсинга сообщения в {channel}: {e}")
+            logger.warning(f"Ошибка парсинга в {channel}: {e}")
             continue
 
     return results
@@ -97,17 +129,17 @@ def parse_messages(html: str, channel: str) -> List[Dict]:
 
 def scrape_telegram() -> List[Dict]:
     all_candidates = []
-    logger.info("Начинаю парсинг Telegram-каналов на кандидатов...")
+    logger.info("Парсинг каналов на соискателей...")
 
     for channel in CHANNELS:
         try:
             logger.info(f"  → {channel}")
             html = fetch_channel_page(channel)
             items = parse_messages(html, channel)
-            logger.info(f"     найдено кандидатов: {len(items)}")
+            logger.info(f"     кандидатов: {len(items)}")
             all_candidates.extend(items)
         except Exception as e:
-            logger.error(f"Не удалось спарсить {channel}: {e}")
+            logger.error(f"Ошибка {channel}: {e}")
 
-    logger.info(f"Всего сырых кандидатов из TG: {len(all_candidates)}")
+    logger.info(f"Всего сырых кандидатов: {len(all_candidates)}")
     return all_candidates
